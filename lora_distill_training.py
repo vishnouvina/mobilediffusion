@@ -1177,6 +1177,9 @@ def main():
                     raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
                 
                 # Predict the noise residual and compute loss
+                #print device of noisy_latents, timesteps, encoder_hidden_states
+                print(noisy_latents.device, timesteps.device, encoder_hidden_states.device)
+
                 model_pred = unet(noisy_latents, timesteps, encoder_hidden_states).sample
 
                 with torch.no_grad():
