@@ -473,7 +473,7 @@ def main():
             lora_dropout=args.lora_dropout,
             bias=args.lora_bias,
         )
-        unet = LoraModel(config, unet)
+        unet = LoraModel(unet, config, "default")
 
         vae.requires_grad_(False)
         if args.train_text_encoder:
@@ -484,7 +484,7 @@ def main():
                 lora_dropout=args.lora_text_encoder_dropout,
                 bias=args.lora_text_encoder_bias,
             )
-            text_encoder = LoraModel(config, text_encoder)
+            text_encoder = LoraModel(text_encoder, config)
     else:
         # freeze parameters of models to save more memory
         unet.requires_grad_(False)

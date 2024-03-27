@@ -636,6 +636,7 @@ def main():
         args.pretrained_model_name_or_path, subfolder="tokenizer", revision=args.revision
     )
 
+
     def deepspeed_zero_init_disabled_context_manager():
         """
         returns either a context list that includes one that will disable zero.Init or an empty context list
@@ -744,7 +745,7 @@ def main():
             lora_dropout=args.lora_dropout,
             bias=args.lora_bias,
         )
-        unet = LoraModel(config, unet)
+        unet = LoraModel(unet, config, "default")
 
         if args.train_text_encoder:
             config = LoraConfig(
@@ -754,7 +755,7 @@ def main():
                 lora_dropout=args.lora_text_encoder_dropout,
                 bias=args.lora_text_encoder_bias,
             )
-            text_encoder = LoraModel(config, text_encoder)
+            text_encoder = LoraModel(text_encoder, config)
         else:
             text_encoder.requires_grad_(False)
     else:
@@ -795,6 +796,7 @@ def main():
 
     # Move unet, vae and text_encoder to device and cast to weight_dtype
     vae.to(accelerator.device, dtype=weight_dtype)
+
     if not args.train_text_encoder:
         text_encoder.to(accelerator.device, dtype=weight_dtype)
 
@@ -1021,7 +1023,7 @@ def main():
                 unet, KD_teacher_unet, text_encoder, optimizer, train_dataloader, lr_scheduler
             )
         else:
-            unet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+            unet, KD_teacher_unet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
                 unet, KD_teacher_unet, optimizer, train_dataloader, lr_scheduler
             )
     else:
@@ -1177,9 +1179,6 @@ def main():
                     raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
                 
                 # Predict the noise residual and compute loss
-                #print device of noisy_latents, timesteps, encoder_hidden_states
-                print(noisy_latents.device, timesteps.device, encoder_hidden_states.device)
-
                 model_pred = unet(noisy_latents, timesteps, encoder_hidden_states).sample
 
                 with torch.no_grad():
