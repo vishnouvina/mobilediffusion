@@ -544,7 +544,7 @@ def parse_args():
     parser.add_argument(
         "--validation_epochs",
         type=int,
-        default=5,
+        default=2,
         help="Run validation every X epochs.",
     )
     parser.add_argument(
@@ -1358,7 +1358,7 @@ def main():
             generator = None
         images = []
 
-        print("Validation time")
+        print("Validation prompt")
 
         for i in range(len(args.validation_prompts)):
                 with torch.autocast("cuda"):
