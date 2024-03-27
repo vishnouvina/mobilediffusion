@@ -270,8 +270,8 @@ def parse_args():
     )
     parser.add_argument(
         "--validation_prompts",
-        type=str,
-        default=None,
+        type=list,
+        default=["A man in a suit"],
         nargs="+",
         help=("A set of prompts evaluated every `--validation_epochs` and logged to `--report_to`."),
     )
@@ -471,7 +471,7 @@ def parse_args():
     parser.add_argument(
         "--report_to",
         type=str,
-        default="tensorboard",
+        default="wandb",
         help=(
             'The integration to report the results and logs to. Supported platforms are `"tensorboard"`'
             ' (default), `"wandb"` and `"comet_ml"`. Use `"all"` to report to all integrations.'
@@ -733,7 +733,7 @@ def main():
         weight_dtype = torch.bfloat16
 
     if args.use_peft:
-        from peft import LoraConfig, LoraModel, get_peft_model_state_dict, set_peft_model_state_dict
+        from peft import LoraConfig, LoraModel, get_peft_model, get_peft_model_state_dict, set_peft_model_state_dict
 
         UNET_TARGET_MODULES = ["to_q", "to_v", "query", "value"]
         TEXT_ENCODER_TARGET_MODULES = ["q_proj", "v_proj"]
@@ -745,7 +745,7 @@ def main():
             lora_dropout=args.lora_dropout,
             bias=args.lora_bias,
         )
-        unet = LoraModel(unet, config, "default")
+        unet = get_peft_model(unet, config) #LoraModel(unet, config, "default")
 
         if args.train_text_encoder:
             config = LoraConfig(
@@ -755,7 +755,7 @@ def main():
                 lora_dropout=args.lora_text_encoder_dropout,
                 bias=args.lora_text_encoder_bias,
             )
-            text_encoder = LoraModel(text_encoder, config)
+            text_encoder = get_peft_model(text_encoder, config) #LoraModel(text_encoder, config)
         else:
             text_encoder.requires_grad_(False)
     else:
@@ -1270,16 +1270,7 @@ def main():
                     # Store the UNet parameters temporarily and load the EMA parameters to perform inference.
                     ema_unet.store(unet.parameters())
                     ema_unet.copy_to(unet.parameters())
-                log_validation(
-                    vae,
-                    text_encoder,
-                    tokenizer,
-                    unet,
-                    args,
-                    accelerator,
-                    weight_dtype,
-                    global_step,
-                )
+
                 if args.use_ema:
                     # Switch back to the original UNet parameters.
                     ema_unet.restore(unet.parameters())
@@ -1304,8 +1295,8 @@ def main():
                 )
 
             accelerator.save(state_dict, os.path.join(args.output_dir, f"{global_step}_lora.pt"))
-            with open(os.path.join(args.output_dir, f"{global_step}_lora_config.json"), "w") as f:
-                json.dump(lora_config, f)
+            #with open(os.path.join(args.output_dir, f"{global_step}_lora_config.json"), "w") as f:
+                #json.dump(lora_config, f)
         else:
             unet = unet.to(torch.float32)
             unet.save_attn_procs(args.output_dir)
@@ -1326,12 +1317,11 @@ def main():
 
         if args.use_peft:
 
-            def load_and_set_lora_ckpt(pipe, ckpt_dir, global_step, device, dtype):
-                with open(os.path.join(args.output_dir, f"{global_step}_lora_config.json"), "r") as f:
-                    lora_config = json.load(f)
-                print(lora_config)
+            def load_and_set_lora_ckpt(pipe, lora_config, ckpt_dir, global_step, device, dtype):
+                #with open(os.path.join(ckpt_dir, f"{global_step}_lora_config.json"), "r") as f:
+                    #lora_config = json.load(f)
 
-                checkpoint = os.path.join(args.output_dir, f"{global_step}_lora.pt")
+                checkpoint = os.path.join(ckpt_dir, f"{global_step}_lora.pt")
                 lora_checkpoint_sd = torch.load(checkpoint)
                 unet_lora_ds = {k: v for k, v in lora_checkpoint_sd.items() if "text_encoder_" not in k}
                 text_encoder_lora_ds = {
@@ -1339,12 +1329,12 @@ def main():
                 }
 
                 unet_config = LoraConfig(**lora_config["peft_config"])
-                pipe.unet = LoraModel(unet_config, pipe.unet)
+                pipe.unet = get_peft_model(pipe.unet, unet_config) #LoraModel(unet_config, pipe.unet)
                 set_peft_model_state_dict(pipe.unet, unet_lora_ds)
 
                 if "text_encoder_peft_config" in lora_config:
                     text_encoder_config = LoraConfig(**lora_config["text_encoder_peft_config"])
-                    pipe.text_encoder = LoraModel(text_encoder_config, pipe.text_encoder)
+                    pipe.text_encoder = get_peft_model(pipe.text_encoder, text_encoder_config) #LoraModel(text_encoder_config, pipe.text_encoder)
                     set_peft_model_state_dict(pipe.text_encoder, text_encoder_lora_ds)
 
                 if dtype in (torch.float16, torch.bfloat16):
@@ -1354,7 +1344,7 @@ def main():
                 pipe.to(device)
                 return pipe
 
-            pipeline = load_and_set_lora_ckpt(pipeline, args.output_dir, global_step, accelerator.device, weight_dtype)
+            pipeline = load_and_set_lora_ckpt(pipeline, lora_config, args.output_dir, global_step, accelerator.device, weight_dtype)
 
         else:
             pipeline = pipeline.to(accelerator.device)
@@ -1367,6 +1357,8 @@ def main():
         else:
             generator = None
         images = []
+
+        print("Validation time")
 
         for i in range(len(args.validation_prompts)):
                 with torch.autocast("cuda"):
@@ -1382,7 +1374,7 @@ def main():
                     tracker.log(
                         {
                             "test": [
-                                wandb.Image(image, caption=f"{i}: {args.validation_prompt}")
+                                wandb.Image(image, caption=f"{i}: {args.validation_prompts[i]}")
                                 for i, image in enumerate(images)
                             ]
                         }
