@@ -795,6 +795,7 @@ def main():
         lora_layers = AttnProcsLayers(unet.attn_processors)
 
     # Move unet, vae and text_encoder to device and cast to weight_dtype
+    unet.to(accelerator.device, dtype=weight_dtype)
     vae.to(accelerator.device, dtype=weight_dtype)
 
     if not args.train_text_encoder:
@@ -1275,6 +1276,64 @@ def main():
                     # Switch back to the original UNet parameters.
                     ema_unet.restore(unet.parameters())
 
+                # run validation inference
+                logger.info("Running validation... ")
+
+                pipeline = StableDiffusionPipeline.from_pretrained(
+                    args.pretrained_model_name_or_path,
+                    vae=accelerator.unwrap_model(vae),
+                    text_encoder=accelerator.unwrap_model(text_encoder),
+                    tokenizer=tokenizer,
+                    unet=accelerator.unwrap_model(unet),
+                    safety_checker=None,
+                    revision=args.revision,
+                    torch_dtype=weight_dtype,
+                )
+                pipeline = pipeline.to(accelerator.device)
+                pipeline.set_progress_bar_config(disable=True)
+
+                if args.enable_xformers_memory_efficient_attention:
+                    pipeline.enable_xformers_memory_efficient_attention()
+
+                if args.seed is not None:
+                    generator = torch.Generator(device=accelerator.device).manual_seed(args.seed)
+                else:
+                    generator = None
+                images = []
+
+                for i in range(len(args.validation_prompts)):
+                        with torch.autocast("cuda"):
+                            image = pipeline(args.validation_prompts[i], num_inference_steps=20, generator=generator).images[0]
+                        images.append(image)
+
+                if accelerator.is_main_process:
+                    for tracker in accelerator.trackers:
+                        if tracker.name == "tensorboard":
+                            np_images = np.stack([np.asarray(img) for img in images])
+                            tracker.writer.add_images("test", np_images, epoch, dataformats="NHWC")
+                        if tracker.name == "wandb":
+                            tracker.log(
+                                {
+                                    "test": [
+                                        wandb.Image(image, caption=f"{i}: {args.validation_prompts[i]}")
+                                        for i, image in enumerate(images)
+                                    ]
+                                }
+                            )
+
+                del pipeline
+                torch.cuda.empty_cache()
+
+                if args.push_to_hub:
+                    save_model_card(args, repo_id, images, repo_folder=args.output_dir)
+                    upload_folder(
+                        repo_id=repo_id,
+                        folder_path=args.output_dir,
+                        commit_message="End of training",
+                        ignore_patterns=["step_*", "epoch_*"],
+                    )
+            
+
     # Save the lora layers
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
@@ -1300,7 +1359,7 @@ def main():
         else:
             unet = unet.to(torch.float32)
             unet.save_attn_procs(args.output_dir)
-
+            
         #Save the final model
         unet = accelerator.unwrap_model(unet)
         if args.use_ema:
@@ -1351,14 +1410,14 @@ def main():
             # load attention processors
             pipeline.unet.load_attn_procs(args.output_dir)
 
-        # run inference
+        # run final inference
         if args.seed is not None:
             generator = torch.Generator(device=accelerator.device).manual_seed(args.seed)
         else:
             generator = None
         images = []
 
-        print("Validation prompt")
+        logger.info("Running final validation... ")
 
         for i in range(len(args.validation_prompts)):
                 with torch.autocast("cuda"):
@@ -1380,16 +1439,14 @@ def main():
                         }
                     )
 
-
-        if args.push_to_hub:
-            save_model_card(args, repo_id, images, repo_folder=args.output_dir)
-            upload_folder(
-                repo_id=repo_id,
-                folder_path=args.output_dir,
-                commit_message="End of training",
-                ignore_patterns=["step_*", "epoch_*"],
-            )
-            
+            if args.push_to_hub:
+                save_model_card(args, repo_id, images, repo_folder=args.output_dir)
+                upload_folder(
+                    repo_id=repo_id,
+                    folder_path=args.output_dir,
+                    commit_message="End of training",
+                    ignore_patterns=["step_*", "epoch_*"],
+                )
     accelerator.end_training()
 
 
