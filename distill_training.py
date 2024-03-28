@@ -734,12 +734,17 @@ def main():
             for i in range(len(models)):
                 # pop models so that they are not loaded again
                 model = models.pop()
-
                 # load diffusers style into model
                 load_model = UNet2DConditionModel.from_pretrained(input_dir, subfolder="unet")
                 model.register_to_config(**load_model.config)
+            
+                state_dict_bis = load_model.state_dict()
 
-                model.load_state_dict(load_model.state_dict())
+                for key, value in load_model.state_dict().items():
+                    new_key = "base_model." + key
+                    state_dict_bis[new_key] = value
+
+                model.load_state_dict(state_dict_bis, strict=False)
                 del load_model
 
         accelerator.register_save_state_pre_hook(save_model_hook)

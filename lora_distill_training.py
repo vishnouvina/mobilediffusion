@@ -396,7 +396,7 @@ def parse_args():
         ),
     )
     parser.add_argument(
-        "--lr_warmup_steps", type=int, default=500, help="Number of steps for the warmup in the lr scheduler."
+        "--lr_warmup_steps", type=int, default=0, help="Number of steps for the warmup in the lr scheduler."
     )
 
     parser.add_argument(
@@ -516,7 +516,7 @@ def parse_args():
     parser.add_argument(
         "--checkpointing_steps",
         type=int,
-        default=500,
+        default=250,
         help=(
             "Save a checkpoint of the training state every X updates. These checkpoints are only suitable for resuming"
             " training using `--resume_from_checkpoint`."
@@ -721,8 +721,9 @@ def main():
         ema_unet = EMAModel(ema_unet.parameters(), model_cls=UNet2DConditionModel, model_config=ema_unet.config)
 
 
-    # Freeze vae
+    # Freeze vae and KD teacher
     vae.requires_grad_(False)
+    KD_teacher_unet.requires_grad_(False)
 
     # For mixed precision training we cast the text_encoder and vae weights to half-precision
     # as these models are only used for inference, keeping weights in full precision is not required.
@@ -797,9 +798,8 @@ def main():
     # Move unet, vae and text_encoder to device and cast to weight_dtype
     unet.to(accelerator.device, dtype=weight_dtype)
     vae.to(accelerator.device, dtype=weight_dtype)
-
-    if not args.train_text_encoder:
-        text_encoder.to(accelerator.device, dtype=weight_dtype)
+    KD_teacher_unet.to(accelerator.device)
+    text_encoder.to(accelerator.device, dtype=weight_dtype)
 
     if args.enable_xformers_memory_efficient_attention:
         if is_xformers_available():
@@ -837,12 +837,17 @@ def main():
             for i in range(len(models)):
                 # pop models so that they are not loaded again
                 model = models.pop()
-
                 # load diffusers style into model
                 load_model = UNet2DConditionModel.from_pretrained(input_dir, subfolder="unet")
                 model.register_to_config(**load_model.config)
+            
+                state_dict_bis = load_model.state_dict()
 
-                model.load_state_dict(load_model.state_dict())
+                for key, value in load_model.state_dict().items():
+                    new_key = "base_model." + key
+                    state_dict_bis[new_key] = value
+
+                model.load_state_dict(state_dict_bis, strict=False)
                 del load_model
 
         accelerator.register_save_state_pre_hook(save_model_hook)
@@ -1074,12 +1079,12 @@ def main():
             path = dirs[-1] if len(dirs) > 0 else None
 
         if path is None:
-            accelerator.print(
+            logger.info(
                 f"Checkpoint '{args.resume_from_checkpoint}' does not exist. Starting a new training run."
             )
             args.resume_from_checkpoint = None
         else:
-            accelerator.print(f"Resuming from checkpoint {path}")
+            logger.info(f"Resuming from checkpoint {path}")
             accelerator.load_state(os.path.join(args.output_dir, path))
             global_step = int(path.split("-")[1])
 
@@ -1329,7 +1334,7 @@ def main():
                     upload_folder(
                         repo_id=repo_id,
                         folder_path=args.output_dir,
-                        commit_message="End of training",
+                        commit_message= f"End of epoch {epoch}",
                         ignore_patterns=["step_*", "epoch_*"],
                     )
             
