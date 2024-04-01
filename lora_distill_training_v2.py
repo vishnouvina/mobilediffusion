@@ -218,6 +218,13 @@ def parse_args():
         help="Path to pretrained model or model identifier from huggingface.co/models.",
     )
     parser.add_argument(
+        "--pretrained__student_model_name_or_path",
+        type=str,
+        default="SG161222/Realistic_Vision_V4.0",
+        required=True,
+        help="Path to pretrained model or model identifier from huggingface.co/models.",
+    )
+    parser.add_argument(
         "--revision",
         type=str,
         default=None,
@@ -702,7 +709,7 @@ def main():
 
         
     unet = UNet2DConditionModel.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision
+        args.pretrained__student_model_name_or_path, subfolder="unet", revision=args.non_ema_revision
     )
 
     KD_teacher_unet=UNet2DConditionModel.from_pretrained(
@@ -759,41 +766,6 @@ def main():
             text_encoder = get_peft_model(text_encoder, config) #LoraModel(text_encoder, config)
         else:
             text_encoder.requires_grad_(False)
-    else:
-        # freeze parameters of models to save more memory
-        unet.requires_grad_(False)
-        text_encoder.requires_grad_(False)
-
-        # now we will add new LoRA weights to the attention layers
-        # It's important to realize here how many attention weights will be added and of which sizes
-        # The sizes of the attention layers consist only of two different variables:
-        # 1) - the "hidden_size", which is increased according to `unet.config.block_out_channels`.
-        # 2) - the "cross attention size", which is set to `unet.config.cross_attention_dim`.
-
-        # Let's first see how many attention processors we will have to set.
-        # For Stable Diffusion, it should be equal to:
-        # - down blocks (2x attention layers) * (2x transformer layers) * (3x down blocks) = 12
-        # - mid blocks (2x attention layers) * (1x transformer layers) * (1x mid blocks) = 2
-        # - up blocks (2x attention layers) * (3x transformer layers) * (3x down blocks) = 18
-        # => 32 layers
-
-        # Set correct lora layers
-        lora_attn_procs = {}
-        for name in unet.attn_processors.keys():
-            cross_attention_dim = None if name.endswith("attn1.processor") else unet.config.cross_attention_dim
-            if name.startswith("mid_block"):
-                hidden_size = unet.config.block_out_channels[-1]
-            elif name.startswith("up_blocks"):
-                block_id = int(name[len("up_blocks.")])
-                hidden_size = list(reversed(unet.config.block_out_channels))[block_id]
-            elif name.startswith("down_blocks"):
-                block_id = int(name[len("down_blocks.")])
-                hidden_size = unet.config.block_out_channels[block_id]
-
-            lora_attn_procs[name] = LoRAAttnProcessor(hidden_size=hidden_size, cross_attention_dim=cross_attention_dim)
-
-        unet.set_attn_processor(lora_attn_procs)
-        lora_layers = AttnProcsLayers(unet.attn_processors)
 
     # Move unet, vae and text_encoder to device and cast to weight_dtype
     unet.to(accelerator.device, dtype=weight_dtype)
@@ -879,29 +851,20 @@ def main():
     else:
         optimizer_cls = torch.optim.AdamW
 
-    if args.use_peft:
-        # Optimizer creation
-        params_to_optimize = (
-            itertools.chain(unet.parameters(), text_encoder.parameters())
-            if args.train_text_encoder
-            else unet.parameters()
-        )
-        optimizer = optimizer_cls(
-            params_to_optimize,
-            lr=args.learning_rate,
-            betas=(args.adam_beta1, args.adam_beta2),
-            weight_decay=args.adam_weight_decay,
-            eps=args.adam_epsilon,
-        )
-    else:
-        #We optimize only LoRA parameters in that case
-        optimizer = optimizer_cls(
-            lora_layers.parameters(),
-            lr=args.learning_rate,
-            betas=(args.adam_beta1, args.adam_beta2),
-            weight_decay=args.adam_weight_decay,
-            eps=args.adam_epsilon,
-        )
+    # Optimizer creation
+    params_to_optimize = (
+        itertools.chain(unet.parameters(), text_encoder.parameters())
+        if args.train_text_encoder
+        else unet.parameters()
+    )
+    optimizer = optimizer_cls(
+        params_to_optimize,
+        lr=args.learning_rate,
+        betas=(args.adam_beta1, args.adam_beta2),
+        weight_decay=args.adam_weight_decay,
+        eps=args.adam_epsilon,
+    )
+
 
 
     # Get the datasets: you can either provide your own training and evaluation files (see below)
@@ -1023,18 +986,13 @@ def main():
     )
 
     # Prepare everything with our `accelerator`.
-    if args.use_peft:
-        if args.train_text_encoder:
-            unet, KD_teacher_unet, text_encoder, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-                unet, KD_teacher_unet, text_encoder, optimizer, train_dataloader, lr_scheduler
-            )
-        else:
-            unet, KD_teacher_unet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-                unet, KD_teacher_unet, optimizer, train_dataloader, lr_scheduler
-            )
+    if args.train_text_encoder:
+        unet, KD_teacher_unet, text_encoder, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+            unet, KD_teacher_unet, text_encoder, optimizer, train_dataloader, lr_scheduler
+        )
     else:
-        lora_layers, KD_teacher_unet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-            lora_layers, KD_teacher_unet, optimizer, train_dataloader, lr_scheduler
+        unet, KD_teacher_unet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+            unet, KD_teacher_unet, optimizer, train_dataloader, lr_scheduler
         )
 
     if args.use_ema:
@@ -1064,8 +1022,6 @@ def main():
     logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
     logger.info(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
     logger.info(f"  Total optimization steps = {args.max_train_steps}")
-    logger.info(f"  Number params Student = {unet.num_parameters()}")
-    logger.info(f"  Number params Teacher = {KD_teacher_unet.num_parameters()}")
     global_step = 0
     first_epoch = 0
 
@@ -1217,14 +1173,11 @@ def main():
                 # Backpropagate
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
-                    if args.use_peft:
-                        params_to_clip = (
-                            itertools.chain(unet.parameters(), text_encoder.parameters())
-                            if args.train_text_encoder
-                            else unet.parameters()
-                        )
-                    else:
-                        params_to_clip = lora_layers.parameters()
+                    params_to_clip = (
+                        itertools.chain(unet.parameters(), text_encoder.parameters())
+                        if args.train_text_encoder
+                        else unet.parameters()
+                    )
                     accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
 
                 optimizer.step()
