@@ -113,10 +113,49 @@ extension ModelInfo {
 }
 
 extension ModelInfo {
+    static let v14Base = ModelInfo(
+        modelId: "pcuenq/coreml-stable-diffusion-1-4",
+        modelVersion: "CompVis SD 1.4"
+    )
 
+    static let v14Palettized = ModelInfo(
+        modelId: "apple/coreml-stable-diffusion-1-4-palettized",
+        modelVersion: "CompVis SD 1.4 [6 bit]",
+        supportsEncoder: true,
+        supportsAttentionV2: true,
+        quantized: true
+    )
+
+    static let v15Base = ModelInfo(
+        modelId: "pcuenq/coreml-stable-diffusion-v1-5",
+        modelVersion: "RunwayML SD 1.5"
+    )
+    
+    static let v15Palettized = ModelInfo(
+        modelId: "apple/coreml-stable-diffusion-v1-5-palettized",
+        modelVersion: "RunwayML SD 1.5 [6 bit]",
+        supportsEncoder: true,
+        supportsAttentionV2: true,
+        quantized: true
+    )
+    
     static let v2Base = ModelInfo(
         modelId: "pcuenq/coreml-stable-diffusion-2-base",
         modelVersion: "StabilityAI SD 2.0",
+        supportsEncoder: true
+    )
+    
+    static let v2Palettized = ModelInfo(
+        modelId: "apple/coreml-stable-diffusion-2-base-palettized",
+        modelVersion: "StabilityAI SD 2.0 [6 bit]",
+        supportsEncoder: true,
+        supportsAttentionV2: true,
+        quantized: true
+    )
+
+    static let v21Base = ModelInfo(
+        modelId: "pcuenq/coreml-stable-diffusion-2-1-base",
+        modelVersion: "StabilityAI SD 2.1",
         supportsEncoder: true
     )
     
@@ -128,12 +167,6 @@ extension ModelInfo {
         quantized: true
     )
         
-    static let v21Base = ModelInfo(
-        modelId: "pcuenq/coreml-stable-diffusion-2-1-base",
-        modelVersion: "StabilityAI SD 2.1",
-        supportsEncoder: true
-    )
-
     static let ofaSmall = ModelInfo(
         modelId: "pcuenq/coreml-small-stable-diffusion-v0",
         modelVersion: "OFA-Sys/small-stable-diffusion-v0"
@@ -142,6 +175,13 @@ extension ModelInfo {
     static let xl = ModelInfo(
         modelId: "apple/coreml-stable-diffusion-xl-base",
         modelVersion: "SDXL base (1024, macOS)",
+        supportsEncoder: true,
+        isXL: true
+    )
+    
+    static let xlWithRefiner = ModelInfo(
+        modelId: "apple/coreml-stable-diffusion-xl-base-with-refiner",
+        modelVersion: "SDXL with refiner (1024, macOS)",
         supportsEncoder: true,
         isXL: true
     )
@@ -165,13 +205,20 @@ extension ModelInfo {
     static let MODELS: [ModelInfo] = {
         if deviceSupportsQuantization {
             var models = [
+                ModelInfo.ofaSmall,
+                ModelInfo.v14Base,
+                ModelInfo.v14Palettized,
+                ModelInfo.v15Base,
+                ModelInfo.v15Palettized,
                 ModelInfo.v2Base,
-                ModelInfo.v21Palettized,
-                ModelInfo.v21Base
+                ModelInfo.v2Palettized,
+                ModelInfo.v21Base,
+                ModelInfo.v21Palettized
             ]
             if runningOnMac {
                 models.append(contentsOf: [
                     ModelInfo.xl,
+                    ModelInfo.xlWithRefiner,
                     ModelInfo.xlmbp
                 ])
             } else {
@@ -180,8 +227,11 @@ extension ModelInfo {
             return models
         } else {
             return [
+                ModelInfo.ofaSmall,
+                ModelInfo.v14Base,
+                ModelInfo.v15Base,
                 ModelInfo.v2Base,
-                ModelInfo.v21Base
+                ModelInfo.v21Base,
             ]
         }
     }()

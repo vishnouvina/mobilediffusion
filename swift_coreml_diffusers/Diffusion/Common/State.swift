@@ -11,7 +11,7 @@ import SwiftUI
 import StableDiffusion
 import CoreML
 
-let DEFAULT_MODEL = ModelInfo.v2Base
+let DEFAULT_MODEL = ModelInfo.xlmbp
 let DEFAULT_PROMPT = "Labrador in the style of Vermeer"
 
 enum GenerationState {
